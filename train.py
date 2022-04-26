@@ -89,7 +89,7 @@ def train():
 
     if opt.checkpoint_path is not None:
         print("Loading model from %s" % opt.checkpoint_path)
-        util.custom_load(model, path=opt.checkpoint_path, discriminator=None, optimizer=None)
+        util.custom_load(model, path=opt.checkpoint_path)
     models.zero_bg = opt.zero_bg
 
     ckpt_dir = os.path.join(opt.logging_root, 'checkpoints')

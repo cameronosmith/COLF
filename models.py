@@ -27,7 +27,7 @@ from torch.nn.functional import normalize
 
 class COLF(nn.Module):
 
-    def __init__(self,phi_latent=128, num_phi=1, phi_out_latent=64, slot_iter=3,
+    def __init__(self,phi_latent=128, num_phi=1, phi_out_latent=64,
                 hyper_hidden=1,phi_hidden=2, img_feat_dim=128,zero_bg=False):
 
         super().__init__()
@@ -54,7 +54,6 @@ class COLF(nn.Module):
                               hyper_hidden_features=num_hidden_units_phi,
                               hypo_module=self.phi)
 
-        self.slot_iter=slot_iter
 
         # Maps pixels to features for SlotAttention
         self.img_encoder = nn.Sequential(
@@ -127,13 +126,13 @@ class COLF(nn.Module):
         fg_params = self.hyper_fg(fg_rep)
         bg_params = self.hyper_bg(bg_rep)
         phi_params=OrderedDict()
-        for k in coarse_bg_params.keys(): 
+        for k in bg_params.keys(): 
             phi_params[k]=torch.cat([bg_params[k],fg_params[k]])
 
         feats = self.phi(coords,params=phi_params)
         feats = rearrange(feats, "(p b q) pix l -> p b q pix l", p=self.num_phi,b=b,q=n_qry)
         rgbs = torch.cat((self.pix_gen_bg(feats[:1]),self.pix_gen_fg(feats[1:])))
-        seg = self.compositor(coarse_feats)
+        seg = self.compositor(feats)
         rgb  = (rgbs*seg).sum(0) # AB   b q pix 3
 
         out_dict = {

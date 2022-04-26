@@ -30,7 +30,7 @@ p.add_argument('--img_sidelength',type=int, default=64, help='image sidelength t
 p.add_argument('--checkpoint_path', default=None, help='Checkpoint to trained model.')
 p.add_argument('--max_num_instances', type=int, default=None,
                help='If \'data_root\' has more instances, only the first max_num_instances are used.')
-p.add_argument('--gtseg_path',      type=str, default="", help='Path to gt segmentation masks.')
+p.add_argument('--gtseg_path',      type=str, default=None, help='Path to gt segmentation masks.')
 
 # Model options
 p.add_argument('--phi_latent',      type=int, default=128, help='Dimensionality of the regressed object latent codes.')
@@ -38,7 +38,6 @@ p.add_argument('--phi_out_latent',  type=int, default=64,  help='Dimensionality 
 p.add_argument('--hyper_hidden',    type=int, default=1,   help='Number of layers of the hypernetwork.')
 p.add_argument('--phi_hidden',      type=int, default=2,   help='Number of layers of the phi hyponetwork.')
 p.add_argument('--zero_bg',         type=bool,default=False, help='Whether to zero-out the regressed background phi code.')
-p.add_argument('--slot_iter',       type=int, default=3, help='Number of iterations for slot attention.')
 p.add_argument('--num_phi',         type=int, default=2, help='Number of objects to regress per scene.')
 
 opt = p.parse_args()
@@ -53,7 +52,7 @@ def test():
     dataset.test=True
 
     model = models.COLF(phi_latent=opt.phi_latent, phi_out_latent=opt.phi_out_latent,
-                hyper_hidden=opt.hyper_hidden,phi_hidden=opt.phi_hidden,slot_iter=opt.slot_iter,
+                hyper_hidden=opt.hyper_hidden,phi_hidden=opt.phi_hidden,
                 num_phi=opt.num_phi).cuda().eval()
 
     if opt.checkpoint_path is not None:
@@ -82,8 +81,10 @@ def test():
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True,
                             drop_last=True, num_workers=4,)
 
+    run_seg = opt.gtseg_path is not None
+
     lpips_loss_all,ssim_loss_all,psnr_loss_all=0,0,0
-    ari_loss_all,ari_fg_loss_all=0,0
+    ari_loss=0 
     num_pred=0
     num_pred_ari=0
     max_i=-1
@@ -102,31 +103,27 @@ def test():
         for rgb,name in zip(pred_rgb,gt["imgname"]):
             plt.imsave(os.path.join(opt.logging_root,name[0].split("/")[-1]),rgb.permute(1,2,0).cpu().numpy()*.5+.5)
 
-        model_segs = model_out["seg"].squeeze().max(0)[1]
-        """
-        gtsegs,segnames=[],[]
-        for i,imgname in enumerate(gt["imgname"]):
-            name=gt["imgname"][0][0].split("/")[-1][:5]+imgname[0].split("/")[-1][5:-5]+"0_gt_mask%d.png"%i
-            segnames.append(name)
-            gtsegs.append(torch.from_numpy(plt.imread(opt.gtseg_path+name)))
-        gt_segs = torch.stack(gtsegs,0)
+        if run_seg:
+            model_segs = model_out["seg"].squeeze().max(0)[1]
+            gtsegs,segnames=[],[]
+            for i,imgname in enumerate(gt["imgname"]):
+                name=gt["imgname"][0][0].split("/")[-1][:5]+imgname[0].split("/")[-1][5:-5]+"0_gt_mask%d.png"%i
+                segnames.append(name)
+                gtsegs.append(torch.from_numpy(plt.imread(os.path.join(opt.gtseg_path,name))))
+            gt_segs = torch.stack(gtsegs,0)
 
-        for model_seg,gt_seg_rgb in zip(model_segs,gt_segs):
+            for model_seg,gt_seg_rgb in zip(model_segs,gt_segs):
 
-            bg = (((gt_seg_rgb.flatten(0,1).unique(dim=1)/2+.5)*1000).round().int()==251).all(1)
+                bg = (((gt_seg_rgb.flatten(0,1).unique(dim=1)/2+.5)*1000).round().int()==251).all(1)
 
-            gt_seg=torch.zeros_like(model_seg)
-            for unique_i,unique_rgb in enumerate(gt_seg_rgb.flatten(0,1).unique(dim=0)):
-                gt_seg[(gt_seg_rgb.flatten(0,1)==unique_rgb).all(1)]=unique_i
+                gt_seg=torch.zeros_like(model_seg)
+                for unique_i,unique_rgb in enumerate(gt_seg_rgb.flatten(0,1).unique(dim=0)):
+                    gt_seg[(gt_seg_rgb.flatten(0,1)==unique_rgb).all(1)]=unique_i
 
-            plt.imsave(os.path.join(opt.logging_root,name.replace("_gt","")),model_seg.view(128,128).cpu())
+                plt.imsave(os.path.join(opt.logging_root,name.replace("_gt","")),model_seg.view(128,128).cpu())
 
-            ari = sklearn.metrics.cluster.adjusted_rand_score(model_seg.cpu(),gt_seg.cpu())
-            fg_ari = sklearn.metrics.cluster.adjusted_rand_score( model_seg.cpu()[~bg],gt_seg.cpu()[~bg])
-            ari_loss_all+=ari
-            ari_fg_loss_all+=fg_ari
-            num_pred_ari+=1
-        """
+                ari_loss += sklearn.metrics.cluster.adjusted_rand_score(model_seg.cpu(),gt_seg.cpu())
+                num_pred_ari+=1
 
         ssim_loss=piq.ssim(pred_rgb*.5+.5,gt_rgb*.5+.5)
         psnr_loss=piq.psnr(pred_rgb*.5+.5,gt_rgb*.5+.5,1)
@@ -137,13 +134,13 @@ def test():
         num_pred+=1
         
         if iter%10==0:
-            #print("num ari pred",num_pred_ari)
-            #print("num pred",num_pred)
-            #print("ari ",ari_loss_all/num_pred_ari)
-            #print("fg ari ",ari_fg_loss_all/num_pred_ari)
-            #print("ssim",ssim_loss_all/num_pred)
+            if run_seg:
+                print("num ari pred",num_pred_ari)
+                print("num pred",num_pred)
+                print("ari %02f"%(ari_loss/num_pred_ari))
+            print("ssim",ssim_loss_all/num_pred)
             print("lpips",lpips_loss_all/num_pred)
-            #print("psnr",psnr_loss_all/num_pred)
+            print("psnr",psnr_loss_all/num_pred)
 
 if __name__ == '__main__':
     test()
